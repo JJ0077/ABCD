@@ -1,0 +1,474 @@
+```{r}
+rm(list = ls())
+library(ggplot2)
+library(tibble)
+library(tidyr)
+library(readr)
+library(purrr)
+library(dplyr)
+library(stringr)
+library(forcats)
+library(pheatmap)
+library(plotly)
+library(corrplot) 
+library(gamlss)
+library(magrittr)
+library(survey)
+library(fitdistrplus)
+library(lme4)
+library(scatterplot3d)
+```
+
+
+```{r }
+data <- read.csv("daat4jade.csv")
+attach(data)
+any(is.na(data))
+summary(data)
+
+# Explore whether the data is balanced across different sexes and sites.
+addmargins(xtabs( ~ sex + site , data = data))
+
+# Explore cortical volume data
+hist(Total.whole.brain.cortical.volume.in.mm.3)
+
+baseline.data <- data[eventname == "baseline_year_1_arm_1", ]
+followup2.data <- data[eventname == "2_year_follow_up_y_arm_1", ]
+followup4.data <- data[eventname == "4_year_follow_up_y_arm_1", ]
+
+hist(baseline.data$Total.whole.brain.cortical.volume.in.mm.3, breaks = 20)
+hist(followup2.data$Total.whole.brain.cortical.volume.in.mm.3, breaks = 20)
+hist(followup4.data$Total.whole.brain.cortical.volume.in.mm.3, breaks = 20)
+
+# Extracting Total.whole.brain.cortical.volume.in.mm.3 column data from each time point
+baseline_volume <- baseline.data$Total.whole.brain.cortical.volume.in.mm.3
+followup2_volume <- followup2.data$Total.whole.brain.cortical.volume.in.mm.3
+followup4_volume <- followup4.data$Total.whole.brain.cortical.volume.in.mm.3
+
+# Calculate the maximum count among histograms
+max_count <- max(hist(baseline_volume)$counts, hist(followup2_volume)$counts, hist(followup4_volume)$counts)
+
+# Plot histograms
+hist(baseline_volume, breaks = 20, col = "red", main = "Total Whole Brain Cortical Volume",
+     xlab = "Cortical Volume", ylab = "Frequency", ylim = c(0, max_count),
+     xlim = range(baseline_volume, followup2_volume, followup4_volume))
+
+# Adding followup2_volume histogram
+hist(followup2_volume, breaks = 20, col = "blue", add = TRUE)
+# Adding followup4_volume histogram
+hist(followup4_volume, breaks = 20, col = "green", add = TRUE)
+# Adding legend
+legend("topright", legend = c("Baseline", "Followup 2", "Followup 4"), fill = c("red", "blue", "green"))
+
+
+
+# choose baseline data 
+visit_type <- as.factor(visit_type)
+age_days <- as.factor(age_days)
+site <- as.factor(site)
+sex <- as.factor(sex)
+
+mod.baseline <- glm(Total.whole.brain.cortical.volume.in.mm.3 ~ interview_age + visit_type + age_days + site + sex, family = gaussian, data = baseline.data)
+summary(mod.baseline)
+# some coefficients are marked as NA, which is referred to as "singularity".
+# some variables may be perfectly correlated, or there may be linear relationships between variables
+
+# The coefficient for interview_age indicates a statistically significant negative relationship with outcome
+
+#mod.baseline.1 <- glm(Total.whole.brain.cortical.volume.in.mm.3 ~ interview_age + sex, family = gaussian, data = baseline.data)
+#summary(mod.baseline.1)
+
+plot(interview_age,Total.whole.brain.cortical.volume.in.mm.3, xlab = "Interview Age", ylab = "Total Whole Brain Cortical Volume", main = "Baseline Data")
+
+hist(interview_age)
+
+###polt baseline data vs time point 2 data
+```
+
+```{r simulation}
+set.seed(1)
+# Generate 2000 random values for interview_age that follow a gamma distribution
+fit_gamma <- fitdistr(baseline.data$interview_age, "gamma")
+interview_age_sim <- round(rgamma(5000, shape = fit_gamma$estimate["shape"], rate = fit_gamma$estimate["rate"]))
+
+#check the outliers
+fit <- lm(Total.whole.brain.cortical.volume.in.mm.3 ~ interview_age, data = baseline.data)
+residuals <- residuals(fit)
+params <- fitdistr(residuals, "normal")
+# Use the fitted model to predict Total.whole.brain.cortical.volume.in.mm.3 based on the simulated interview_age
+predicted_volume <- predict(fit, newdata = data.frame(interview_age = interview_age_sim))
+
+# Generate random residuals based on the parameters obtained from print(params)
+residuals_sim <- rnorm(5000, mean = params$estimate[1], sd = params$estimate[2])
+
+# Combine the predicted values and simulated residuals to obtain the simulated Total.whole.brain.cortical.volume.in.mm.3
+simulated_volume <- predicted_volume + residuals_sim
+
+# Plot the simulated data
+plot(interview_age_sim, simulated_volume, 
+     xlab = "Interview Age", ylab = "Total Whole Brain Cortical Volume",
+     main = "Simulated Data Based on Fitted Model at Time point 1",
+     col = "blue", pch = 1)
+```
+
+```{r lmer}
+
+# Add the time_point column
+data$time_point <- ifelse(data$eventname == "baseline_year_1_arm_1", 1,
+                          ifelse(data$eventname == "2_year_follow_up_y_arm_1", 2,
+                                 ifelse(data$eventname == "4_year_follow_up_y_arm_1", 3, NA)))
+
+set.seed(1)
+
+# Simulate data
+fit_gamma <- fitdistr(data$interview_age, "gamma")
+interview_age_sim <- round(rgamma(5000, shape = fit_gamma$estimate["shape"], rate = fit_gamma$estimate["rate"]))
+
+# Fit the model
+fit <- lmer(Total.whole.brain.cortical.volume.in.mm.3 ~ interview_age + (1|time_point), data = data)
+residuals <- residuals(fit)
+params <- fitdistr(residuals, "normal")
+
+#vcov(fit)
+
+# Use the model to predict data at each time point
+predicted_volume1 <- predict(fit, newdata = data.frame(interview_age = interview_age_sim, time_point = rep(1, 5000))) 
+predicted_volume2 <- predict(fit, newdata = data.frame(interview_age = interview_age_sim, time_point = rep(2, 5000))) 
+predicted_volume3 <- predict(fit, newdata = data.frame(interview_age = interview_age_sim, time_point = rep(3, 5000))) 
+# Generate random residuals
+residuals_sim1 <- rnorm(5000, mean = params$estimate[1], sd = params$estimate[2])
+residuals_sim2 <- rnorm(5000, mean = params$estimate[1], sd = params$estimate[2])
+residuals_sim3 <- rnorm(5000, mean = params$estimate[1], sd = params$estimate[2])
+
+# Combine predicted values and residuals
+simulated_volume1 <- predicted_volume1 + residuals_sim1
+simulated_volume2 <- predicted_volume2 + residuals_sim2
+simulated_volume3 <- predicted_volume3 + residuals_sim3
+
+
+# Scatter plot for each time point
+plot(interview_age_sim, simulated_volume1, 
+     xlab = "Interview Age", ylab = "Total Whole Brain Cortical Volume",
+     main = "Simulated Data Based on Fitted Model",
+     col = "blue", pch = 1, ylim = range(simulated_volume1, simulated_volume2, simulated_volume3))  
+
+# Add time point 2 and 3
+points(interview_age_sim, simulated_volume2, col = "red", pch = 2)  
+points(interview_age_sim, simulated_volume3, col = "green", pch = 3)  
+
+legend("topright", legend = c("Time Point 1", "Time Point 2", "Time Point 3"), 
+       col = c("blue", "red", "green"), pch = 1:3, title = "Time Points")
+
+
+# Plot simulated data of timepoint1 and timepoint2 to check their association
+plot(simulated_volume1, simulated_volume2,
+     xlab = "Time Point 1 Volume", ylab = "Time Point 2 Volume",
+     main = "Simulated Volume Comparison Between Time Point 1 and Time Point 2",
+     col = "blue", pch = 16)  # 使用蓝色散点
+
+
+
+# Extract IDs with all three eventname types
+src_subject_id.x <- data %>%
+  group_by(src_subject_id.x) %>%
+  filter(all(c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1", "4_year_follow_up_y_arm_1") %in% eventname)) %>%
+  unique()
+
+ids <- as.data.frame(src_subject_id.x)
+#6990 is 2330*3, We obtained a complete data set spanning all three time points.
+
+#The data for time point 3 consists of 2677 entries. There are 2330 rows containing data for all three time points simultaneously. However, there are a few IDs that have data only for time point 3, but not for time points 1 and 2.I'm not sure why this is happening. Are we still adding new participants midway through the experiment?
+
+# Extract Total.whole.brain.cortical.volume.in.mm.3 for each time point
+time_point_1_data <- ids %>%
+  filter(time_point == 1) 
+t1 <- time_point_1_data$Total.whole.brain.cortical.volume.in.mm.3
+
+time_point_2_data <- ids %>%
+  filter(time_point == 2)
+t2 <- time_point_2_data$Total.whole.brain.cortical.volume.in.mm.3
+
+time_point_3_data <- ids %>%
+  filter(time_point == 3)
+t3 <- time_point_3_data$Total.whole.brain.cortical.volume.in.mm.3
+
+
+merged_data <- cbind(t1, t2)
+ggplot(merged_data, aes(x = t1, y = t2)) +
+  geom_point() +
+  xlab("Total Whole Brain Cortical Volume at Time Point 1") +
+  ylab("Total Whole Brain Cortical Volume at Time Point 2") +
+  ggtitle("Scatter Plot of Total Whole Brain Cortical Volume at Time Points 1 and 2")
+
+merged_data <- cbind(t2, t3)
+ggplot(merged_data, aes(x = t2, y = t3)) +
+  geom_point() +
+  xlab("Total Whole Brain Cortical Volume at Time Point 2") +
+  ylab("Total Whole Brain Cortical Volume at Time Point 3") +
+  ggtitle("Scatter Plot of Total Whole Brain Cortical Volume at Time Points 2 and 3")
+
+# Create 3d plot
+scatterplot3d(t1,
+          t2,
+          t3,
+          xlab = "Time Point 1",
+          ylab = "Time Point 2",
+          zlab = "Time Point 3",
+          main = "Total Whole Brain Cortical Volume at Time Points 1, 2, and 3")
+
+#plot with points coloured by time points
+qplot(interview_age, Total.whole.brain.cortical.volume.in.mm.3, colour=time_point , data=ids)+geom_smooth(aes(colour=NULL), method='lm', formula= y~x)
+
+qplot(time_point, Total.whole.brain.cortical.volume.in.mm.3, colour=interview_age, data=ids)+geom_smooth(aes(colour=NULL), method='lm', formula= y~x)
+
+
+```
+
+
+This simulated 5000 observations of adolescents' brain volumes at time points 1, 2, and 3. The relationships between time points 1 and 2, as well as between time points 2 and 3, are illustrated through plots of t1 vs t2 and t2 vs t3, respectively.
+```{r}
+linear_model.12 <- lm(t2 ~ t1, data = merge(time_point_1_data, time_point_2_data, by = "src_subject_id.x"))
+
+summary(linear_model.12)
+
+predicted_t2 <- predict(linear_model.12, newdata = data.frame(t1))
+predicted_t1 <- predict(linear_model.12, newdata = data.frame(t2))
+
+set.seed(123)  
+generated_t1 <- rnorm(5000, mean = predicted_t1, sd = summary(linear_model.12)$sigma)
+generated_t2 <- rnorm(5000, mean = predicted_t2, sd = summary(linear_model.12)$sigma)
+
+generated_data <- data.frame(t1 = generated_t1, t2 = generated_t2)
+
+ggplot(generated_data, aes(x = t1, y = t2)) +
+  geom_point() +
+  xlab("Total Whole Brain Cortical Volume at Generated t1") +
+  ylab("Total Whole Brain Cortical Volume at Generated t2") +
+  ggtitle("Scatter Plot of Generated t1 and t2")
+
+linear_model.23 <- lm(t3 ~ t2, data = merge(time_point_2_data, time_point_3_data, by = "src_subject_id.x"))
+
+summary(linear_model.23)
+
+predicted_t2 <- predict(linear_model.23, newdata = data.frame(t2))
+predicted_t3 <- predict(linear_model.23, newdata = data.frame(t3))
+
+
+set.seed(123)  
+generated_t2 <- rnorm(5000, mean = predicted_t2, sd = summary(linear_model.23)$sigma)
+generated_t3 <- rnorm(5000, mean = predicted_t3, sd = summary(linear_model.23)$sigma)
+
+generated_data <- data.frame(t2 = generated_t2, t3 = generated_t3)
+
+ggplot(generated_data, aes(x = t2, y = t3)) +
+  geom_point() +
+  xlab("Total Whole Brain Cortical Volume at Generated t2") +
+  ylab("Total Whole Brain Cortical Volume at Generated t3") +
+  ggtitle("Scatter Plot of Generated t2 and t3")
+
+
+#another way to generate data
+#cov_matrix <- vcov(linear_model.12)
+#set.seed(123)  
+#simulated_data <- mvrnorm(n = 5000, mu = coef(linear_model.12), Sigma = cov_matrix)
+
+
+#extract id, time points, brain volume, interview_age
+extract_ids <- ids[, c(1, 2, 73, 78,85)]
+
+# Sample 20 unique src_subject_id.x
+sampled_ids <- extract_ids %>%
+  distinct(src_subject_id.x) %>%
+  slice(1:20)  # Choose the first 20 unique src_subject_id.x
+
+# Extract data corresponding to the selected IDs
+sampled_data <- extract_ids %>%
+  filter(src_subject_id.x %in% sampled_ids$src_subject_id.x)
+
+# Plot the data
+ggplot(sampled_data, aes(x = time_point, y = Total.whole.brain.cortical.volume.in.mm.3)) +
+  geom_point() +
+  facet_wrap(~ src_subject_id.x) +
+  labs(x = "Time point", y = "Total Whole Brain Cortical Volume", title = "Total Whole Brain Cortical Volume over time point for each person") +
+  theme_minimal()
+
+# Scatter plot colored by src_subject_id.x with linear regression line
+qplot(time_point, Total.whole.brain.cortical.volume.in.mm.3, colour=src_subject_id.x, data=sampled_data) +
+  geom_smooth(aes(colour=NULL), method='lm', formula= y~x)
+
+
+```
+
+Using a Linear Mixed-Effects Model (LMM), the data is fitted, where the change trend over time is considered as a fixed effect, while the differences between different individuals are regarded as random effects.
+```{r simulate for each person}
+
+# Using a Linear Mixed-Effects Model (LMM), the data is fitted, where the change trend over time is considered as a fixed effect, while the differences between different individuals are regarded as random effects.
+lmer_model <- lmer(Total.whole.brain.cortical.volume.in.mm.3 ~ time_point + (1 | src_subject_id.x), data = extract_ids)
+
+# Selecting the necessary columns from the original data and ignoring the interview_age column
+selected_data <- extract_ids %>%
+  dplyr::select(src_subject_id.x, eventname, Total.whole.brain.cortical.volume.in.mm.3) 
+  
+# Transforming the data into a wide format using the pivot_wider() function
+wide_data <- selected_data %>%
+  pivot_wider(names_from = eventname, values_from = Total.whole.brain.cortical.volume.in.mm.3)
+
+# Reordering the columns to place baseline_year_1_arm_1 in the second column
+wide_data <- wide_data[, c("src_subject_id.x", "baseline_year_1_arm_1", "2_year_follow_up_y_arm_1", "4_year_follow_up_y_arm_1")]
+
+# Generating an empty matrix to store simulated values
+simulated_data <- matrix(NA, ncol = ncol(wide_data) - 1, nrow = nrow(wide_data))
+colnames(simulated_data) <- colnames(wide_data)[-1]  
+rownames(simulated_data) <- rownames(wide_data)
+
+# Generating random effects and simulated data for each participant using a loop
+set.seed(1)
+for (i in 1:nrow(wide_data)) {
+  # Simulating brain volume at baseline_year_1_arm_1 time point
+  simulated_values_baseline <- fixed.effects(lmer_model)["(Intercept)"] + 
+                               ranef(lmer_model)$src_subject_id.x[i, 1]
+  
+  # Simulating brain volume at 2_year_follow_up_y_arm_1 time point
+  simulated_values_2_year <- simulated_values_baseline + 
+                             fixed.effects(lmer_model)["time_point"] +
+                             rnorm(n = 1, mean = 0, sd = sd(residuals(lmer_model)))
+  
+  # Simulating brain volume at 4_year_follow_up_y_arm_1 time point
+  simulated_values_4_year <- simulated_values_2_year + 
+                             fixed.effects(lmer_model)["time_point"] +
+                             rnorm(n = 1, mean = 0, sd = sd(residuals(lmer_model)))
+  
+  # Adding the results to the data frame
+  simulated_data[i, ] <- c(simulated_values_baseline, simulated_values_2_year, simulated_values_4_year)
+}
+
+# Adding participant ID
+simulated_data$src_subject_id.x <- wide_data$src_subject_id.x
+
+# Converting data into long format
+long_data <- simulated_data %>%
+  pivot_longer(cols = -src_subject_id.x, names_to = "eventname", values_to = "Total.whole.brain.cortical.volume.in.mm.3")
+long_data$time_point <- ifelse(long_data$eventname == "baseline_year_1_arm_1", 1,
+                          ifelse(long_data$eventname == "2_year_follow_up_y_arm_1", 2,
+                                 ifelse(long_data$eventname == "4_year_follow_up_y_arm_1", 3, NA)))
+
+# Sampling 20 unique src_subject_id.x
+sampled_ids <- long_data %>%
+  distinct(src_subject_id.x) %>%
+  slice(1:20)
+
+# Extracting data corresponding to the selected IDs
+sampled_data <- long_data %>%
+  filter(src_subject_id.x %in% sampled_ids$src_subject_id.x)
+
+# Plotting the data
+ggplot(sampled_data, aes(x = time_point, y = Total.whole.brain.cortical.volume.in.mm.3)) +
+  geom_point() +
+  facet_wrap(~ src_subject_id.x) +
+  labs(x = "Time point", y = "Total Whole Brain Cortical Volume", title = "Total Whole Brain Cortical Volume over time point for each person") +
+  theme_minimal()
+
+# Scatter plot colored by src_subject_id.x with linear regression line
+qplot(time_point, Total.whole.brain.cortical.volume.in.mm.3, colour=src_subject_id.x, data=sampled_data) +
+  geom_smooth(aes(colour=NULL), method='lm', formula= y~x)
+
+
+```
+
+
+
+```{r gamlss}
+baseline <- data[grepl("(baseline_year_1_arm_1", data$eventname), ] 
+baseline <- as.data.frame(baseline[, sapply(baseline, is.numeric)])
+ggplot(data, aes(x=eventname, y=Total.whole.brain.cortical.volume.in.mm.3))+geom_point()
+
+gamlss1 <- gamlss(Total.whole.brain.cortical.volume.in.mm.3 ~ eventname, sigma.formula = ~eventname, family = NO, data = data )
+
+#need to specify the family, the random effect 
+```
+
+
+
+
+
+
+
+```{r appendix}
+#plot(sex,Total.whole.brain.cortical.volume.in.mm.3, xlab = "Interview Age", ylab = "Total Whole Brain Cortical Volume", main = "Baseline Data")
+
+numeric.data <- as.data.frame(data[, sapply(data, is.numeric)])
+corrplot (cor( sapply (data, as.numeric)),order ="hclust", addrect =3)
+
+hist(numeric_data)
+
+
+# 对数值型列进行中心化
+centered_data <- scale(numeric_columns)
+centered_df <- as.data.frame(centered_data)
+
+attach(baseline)
+model <- gamlss(Total.whole.brain.cortical.volume.in.mm.3 ~ interview_age, data = baseline)
+
+# 提取预测值
+predicted_values <- predict(model, type = "response")
+
+# 绘制趋势图
+plot(predicted_values, type = "l", xlab = "Observation", ylab = "Total.whole.brain.cortical.volume", main = "Trend of Total Whole Brain Cortical Volume")
+
+
+
+##画heatmap
+correlation_matrix <- cor(numeric.data)
+
+# 将小于0.5的相关系数设置为NA
+correlation_matrix[abs(correlation_matrix) <= 0.1] <- NA
+
+# 移除NA值
+correlation_matrix <- na.omit(correlation_matrix)
+
+# 绘制相关性矩阵
+corrplot(correlation_matrix, order = "hclust")
+
+
+##PCA
+standardized_data <- scale(numeric.data)
+
+# 应用PCA
+pca_result <- prcomp(standardized_data)
+
+# 选择主成分数量
+total_variance <- sum(pca_result$sdev^2)
+explained_variance <- pca_result$sdev^2
+cumulative_explained_variance <- cumsum(explained_variance) / total_variance
+num_components <- which.max(cumulative_explained_variance >= 0.8)  # 选择解释总方差的80%以上的主成分数量
+
+# 使用保留的主成分构建新模型
+new_predictors <- predict(pca_result, newdata = standardized_data)[, 1:num_components]
+
+library(mclust)
+# 提取含有三个时间点数据的id
+src_subject_id.x <- data %>%
+  group_by(src_subject_id.x) %>%
+  filter(all(c("baseline_year_1_arm_1", "2_year_follow_up_y_arm_1", "4_year_follow_up_y_arm_1") %in% eventname)) %>%
+  unique()
+
+# 提取所有相关数据
+all_data <- src_subject_id.x %>%
+  select(src_subject_id.x, eventname, Total.whole.brain.cortical.volume.in.mm.3)
+
+# 去除空值行
+cleaned_data <- na.omit(all_data)
+
+# 提取数据作为矩阵
+data_matrix <- cleaned_data %>%
+  spread(key = eventname, value = Total.whole.brain.cortical.volume.in.mm.3) %>%
+  select(-src_subject_id.x) %>%
+  as.matrix()
+
+# 拟合多元正态分布模型
+mclust_model <- Mclust(data_matrix)
+
+# 返回模型参数
+mclust_model$parameters
+```
+
